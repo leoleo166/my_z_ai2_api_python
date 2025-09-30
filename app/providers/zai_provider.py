@@ -43,6 +43,7 @@ class ZAIProvider(BaseProvider):
         # 模型映射
         self.model_mapping = {
             settings.PRIMARY_MODEL: "0727-360B-API",  # GLM-4.5
+            settings.GLM_45V_MODEL: "glm-4.5v",  # GLM-4.5V
             settings.THINKING_MODEL: "0727-360B-API",  # GLM-4.5-Thinking
             settings.SEARCH_MODEL: "0727-360B-API",  # GLM-4.5-Search
             settings.AIR_MODEL: "0727-106B-API",  # GLM-4.5-Air
@@ -52,6 +53,7 @@ class ZAIProvider(BaseProvider):
         """获取支持的模型列表"""
         return [
             settings.PRIMARY_MODEL,
+            settings.GLM_45V_MODEL,
             settings.THINKING_MODEL,
             settings.SEARCH_MODEL,
             settings.AIR_MODEL
@@ -109,6 +111,9 @@ class ZAIProvider(BaseProvider):
         
         # 处理消息格式
         messages = []
+        has_multimodal = False
+        media_stats = {"text": 0, "images": 0, "videos": 0, "documents": 0, "audios": 0}
+        
         for msg in request.messages:
             if isinstance(msg.content, str):
                 messages.append({
@@ -119,21 +124,66 @@ class ZAIProvider(BaseProvider):
                 # 处理多模态内容
                 content_parts = []
                 for part in msg.content:
-                    if hasattr(part, 'type') and hasattr(part, 'text'):
-                        content_parts.append({
-                            "type": part.type,
-                            "text": part.text
-                        })
-                messages.append({
-                    "role": msg.role,
-                    "content": content_parts
-                })
+                    if hasattr(part, 'type'):
+                        part_dict = {"type": part.type}
+                        
+                        # 处理不同类型的内容
+                        if part.type == "text" and hasattr(part, 'text') and part.text:
+                            part_dict["text"] = part.text
+                            media_stats["text"] += 1
+                        elif part.type == "image_url" and hasattr(part, 'image_url') and part.image_url:
+                            part_dict["image_url"] = part.image_url
+                            media_stats["images"] += 1
+                            has_multimodal = True
+                        elif part.type == "video_url" and hasattr(part, 'video_url') and part.video_url:
+                            part_dict["video_url"] = part.video_url
+                            media_stats["videos"] += 1
+                            has_multimodal = True
+                        elif part.type == "document_url" and hasattr(part, 'document_url') and part.document_url:
+                            part_dict["document_url"] = part.document_url
+                            media_stats["documents"] += 1
+                            has_multimodal = True
+                        elif part.type == "audio_url" and hasattr(part, 'audio_url') and part.audio_url:
+                            part_dict["audio_url"] = part.audio_url
+                            media_stats["audios"] += 1
+                            has_multimodal = True
+                        
+                        # 只有当内容不为空时才添加
+                        if any(part_dict.get(key) for key in ["text", "image_url", "video_url", "document_url", "audio_url"]):
+                            content_parts.append(part_dict)
+                
+                # 如果有有效的内容部分，添加到消息中
+                if content_parts:
+                    messages.append({
+                        "role": msg.role,
+                        "content": content_parts
+                    })
+                else:
+                    # 如果没有有效内容，回退到空字符串
+                    messages.append({
+                        "role": msg.role,
+                        "content": ""
+                    })
+        
+        # 记录多模态内容统计
+        if has_multimodal:
+            total_media = media_stats["images"] + media_stats["videos"] + media_stats["documents"] + media_stats["audios"]
+            self.logger.info(f"🎯 检测到多模态请求: 文本({media_stats['text']}) 图像({media_stats['images']}) 视频({media_stats['videos']}) 文档({media_stats['documents']}) 音频({media_stats['audios']})")
+            
+            if is_vision:
+                self.logger.info("✅ GLM-4.5V 支持多模态理解")
+            else:
+                self.logger.warning("⚠️ 检测到多模态内容但模型不支持，请使用 GLM-4.5V 模型")
         
         # 确定请求的模型特性
         requested_model = request.model
         is_thinking = requested_model == settings.THINKING_MODEL
         is_search = requested_model == settings.SEARCH_MODEL
         is_air = requested_model == settings.AIR_MODEL
+        is_vision = requested_model == settings.GLM_45V_MODEL
+        
+        # 记录模型特性
+        self.logger.info(f"🎯 模型特性检测: {requested_model} (thinking={is_thinking}, search={is_search}, air={is_air}, vision={is_vision})")
         
         # 获取上游模型ID
         upstream_model_id = self.model_mapping.get(requested_model, "0727-360B-API")
@@ -156,10 +206,10 @@ class ZAIProvider(BaseProvider):
                 "image_generation": False,
                 "web_search": is_search,
                 "auto_web_search": is_search,
-                "preview_mode": False,
+                "preview_mode": is_vision,  # GLM-4.5V 需要启用预览模式
                 "flags": [],
                 "features": [],
-                "enable_thinking": is_thinking,
+                "enable_thinking": is_thinking or is_vision,  # GLM-4.5V 也支持思考过程
             },
             "background_tasks": {
                 "title_generation": False,
@@ -179,7 +229,34 @@ class ZAIProvider(BaseProvider):
             "model_item": {
                 "id": upstream_model_id,
                 "name": requested_model,
-                "owned_by": "z.ai"
+                "owned_by": "z.ai",
+                "info": {
+                    "id": upstream_model_id,
+                    "user_id": "api-user",
+                    "base_model_id": None,
+                    "name": requested_model,
+                    "params": {
+                        "top_p": 0.6 if is_vision else 0.95,  # GLM-4.5V 使用不同的默认参数
+                        "temperature": 0.8 if is_vision else 0.6,
+                    },
+                    "meta": {
+                        "profile_image_url": "/static/favicon.png",
+                        "description": "Advanced visual understanding and analysis" if is_vision else "Most advanced model, proficient in coding and tool use",
+                        "capabilities": {
+                            "vision": is_vision,
+                            "citations": False,
+                            "preview_mode": is_vision,
+                            "web_search": is_search,
+                            "language_detection": False,
+                            "restore_n_source": False,
+                            "mcp": False if is_vision else True,  # GLM-4.5V 不支持 MCP
+                            "file_qa": False if is_vision else True,
+                            "returnFc": True,
+                            "returnThink": is_thinking or is_vision,
+                            "think": is_thinking or is_vision
+                        }
+                    }
+                }
             },
             "chat_id": chat_id,
             "id": generate_uuid(),

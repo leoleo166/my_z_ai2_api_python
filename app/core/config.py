@@ -109,6 +109,7 @@ class Settings(BaseSettings):
     THINKING_MODEL: str = os.getenv("THINKING_MODEL", "GLM-4.5-Thinking")
     SEARCH_MODEL: str = os.getenv("SEARCH_MODEL", "GLM-4.5-Search")
     AIR_MODEL: str = os.getenv("AIR_MODEL", "GLM-4.5-Air")
+    GLM_45V_MODEL: str = os.getenv("GLM_45V_MODEL", "GLM-4.5V")
 
 
 
@@ -119,6 +120,7 @@ class Settings(BaseSettings):
         return {
             # Z.AI models
             "GLM-4.5": "zai",
+            "GLM-4.5V": "zai",
             "GLM-4.5-Thinking": "zai",
             "GLM-4.5-Search": "zai",
             "GLM-4.5-Air": "zai",

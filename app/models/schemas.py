@@ -10,6 +10,10 @@ class ContentPart(BaseModel):
 
     type: str
     text: Optional[str] = None
+    image_url: Optional[Dict[str, str]] = None
+    video_url: Optional[Dict[str, str]] = None
+    document_url: Optional[Dict[str, str]] = None
+    audio_url: Optional[Dict[str, str]] = None
 
 
 class Message(BaseModel):
