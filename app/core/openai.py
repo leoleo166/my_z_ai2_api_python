@@ -4,7 +4,7 @@
 import time
 import json
 from typing import List, Dict, Any
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from app.core.config import settings
@@ -12,6 +12,7 @@ from app.models.schemas import OpenAIRequest, Message, ModelsResponse, Model, Op
 from app.utils.logger import get_logger
 from app.providers import get_provider_router
 from app.utils.token_pool import get_token_pool
+from app.core import web_routes
 
 logger = get_logger()
 router = APIRouter()
@@ -93,14 +94,33 @@ async def handle_non_stream_response(stream_response, request: OpenAIRequest) ->
 
 
 @router.get("/v1/models")
-async def list_models():
+async def list_models(http_request: Request = None):
     """List available models from all providers"""
+    start_time = time.time()
+    
+    # 获取 User-Agent
+    user_agent = "Unknown"
+    if http_request:
+        user_agent = http_request.headers.get("User-Agent", "Unknown")
+    
     try:
         router_instance = get_provider_router_instance()
         models_data = router_instance.get_models_list()
+        
+        # 更新请求统计
+        duration = (time.time() - start_time) * 1000  # 转换为毫秒
+        web_routes.update_request_stats("/v1/models", 200, duration)
+        web_routes.add_live_request("GET", "/v1/models", 200, duration, user_agent)
+        
         return JSONResponse(content=models_data)
     except Exception as e:
         logger.error(f"❌ 获取模型列表失败: {e}")
+        
+        # 更新请求统计
+        duration = (time.time() - start_time) * 1000  # 转换为毫秒
+        web_routes.update_request_stats("/v1/models", 500, duration)
+        web_routes.add_live_request("GET", "/v1/models", 500, duration, user_agent)
+        
         # 返回默认模型列表作为后备
         current_time = int(time.time())
         fallback_response = ModelsResponse(
@@ -115,10 +135,16 @@ async def list_models():
 
 
 @router.post("/v1/chat/completions")
-async def chat_completions(request: OpenAIRequest, authorization: str = Header(...)):
+async def chat_completions(openai_request: OpenAIRequest, authorization: str = Header(...), http_request: Request = None):
     """Handle chat completion requests with multi-provider architecture"""
-    role = request.messages[0].role if request.messages else "unknown"
-    logger.info(f"😶‍🌫️ 收到客户端请求 - 模型: {request.model}, 流式: {request.stream}, 消息数: {len(request.messages)}, 角色: {role}, 工具数: {len(request.tools) if request.tools else 0}")
+    start_time = time.time()
+    role = openai_request.messages[0].role if openai_request.messages else "unknown"
+    logger.info(f"😶‍🌫️ 收到客户端请求 - 模型: {openai_request.model}, 流式: {openai_request.stream}, 消息数: {len(openai_request.messages)}, 角色: {role}, 工具数: {len(openai_request.tools) if openai_request.tools else 0}")
+
+    # 获取 User-Agent
+    user_agent = "Unknown"
+    if http_request:
+        user_agent = http_request.headers.get("User-Agent", "Unknown")
 
     try:
         # Validate API key (skip if SKIP_AUTH_TOKEN is enabled)
@@ -132,21 +158,33 @@ async def chat_completions(request: OpenAIRequest, authorization: str = Header(.
 
         # 使用多提供商路由器处理请求
         router_instance = get_provider_router_instance()
-        result = await router_instance.route_request(request)
+        result = await router_instance.route_request(openai_request)
 
         # 检查是否有错误
         if isinstance(result, dict) and "error" in result:
             error_info = result["error"]
             if error_info.get("code") == "model_not_found":
-                raise HTTPException(status_code=404, detail=error_info["message"])
+                status_code = 404
             else:
-                raise HTTPException(status_code=500, detail=error_info["message"])
+                status_code = 500
+            
+            # 更新请求统计
+            duration = (time.time() - start_time) * 1000  # 转换为毫秒
+            web_routes.update_request_stats("/v1/chat/completions", status_code, duration)
+            web_routes.add_live_request("POST", "/v1/chat/completions", status_code, duration, user_agent, openai_request.model)
+            
+            raise HTTPException(status_code=status_code, detail=error_info["message"])
 
         # 处理响应
-        if request.stream:
+        if openai_request.stream:
             # 流式响应
             if hasattr(result, '__aiter__'):
                 # 结果是异步生成器
+                # 更新请求统计
+                duration = (time.time() - start_time) * 1000  # 转换为毫秒
+                web_routes.update_request_stats("/v1/chat/completions", 200, duration)
+                web_routes.add_live_request("POST", "/v1/chat/completions", 200, duration, user_agent, openai_request.model)
+                
                 return StreamingResponse(
                     result,
                     media_type="text/event-stream",
@@ -158,19 +196,45 @@ async def chat_completions(request: OpenAIRequest, authorization: str = Header(.
                 )
             else:
                 # 结果是字典，可能包含错误
+                duration = (time.time() - start_time) * 1000  # 转换为毫秒
+                web_routes.update_request_stats("/v1/chat/completions", 500, duration)
+                web_routes.add_live_request("POST", "/v1/chat/completions", 500, duration, user_agent, openai_request.model)
+                
                 raise HTTPException(status_code=500, detail="Expected streaming response but got non-streaming result")
         else:
             # 非流式响应
             if isinstance(result, dict):
+                # 更新请求统计
+                duration = (time.time() - start_time) * 1000  # 转换为毫秒
+                web_routes.update_request_stats("/v1/chat/completions", 200, duration)
+                web_routes.add_live_request("POST", "/v1/chat/completions", 200, duration, user_agent, openai_request.model)
+                
                 return JSONResponse(content=result)
             else:
                 # 如果是异步生成器，需要收集所有内容
-                return await handle_non_stream_response(result, request)
+                response = await handle_non_stream_response(result, openai_request)
+                
+                # 更新请求统计
+                duration = (time.time() - start_time) * 1000  # 转换为毫秒
+                web_routes.update_request_stats("/v1/chat/completions", 200, duration)
+                web_routes.add_live_request("POST", "/v1/chat/completions", 200, duration, user_agent, openai_request.model)
+                
+                return response
 
-    except HTTPException:
+    except HTTPException as e:
+        # 更新请求统计
+        duration = (time.time() - start_time) * 1000  # 转换为毫秒
+        web_routes.update_request_stats("/v1/chat/completions", e.status_code, duration)
+        web_routes.add_live_request("POST", "/v1/chat/completions", e.status_code, duration, user_agent, openai_request.model)
+        
         # 重新抛出 HTTP 异常
         raise
     except Exception as e:
+        # 更新请求统计
+        duration = (time.time() - start_time) * 1000  # 转换为毫秒
+        web_routes.update_request_stats("/v1/chat/completions", 500, duration)
+        web_routes.add_live_request("POST", "/v1/chat/completions", 500, duration, user_agent, openai_request.model)
+        
         logger.error(f"❌ 请求处理失败: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 

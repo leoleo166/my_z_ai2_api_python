@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ service_name }} - OpenAI兼容API代理</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 40px;
+            margin-top: 40px;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+        }
+        .subtitle {
+            color: #666;
+            font-size: 1.2rem;
+            margin-bottom: 30px;
+        }
+        .links {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 40px;
+        }
+        .link-card {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border: 1px solid #e9ecef;
+        }
+        .link-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .link-card h3 {
+            margin-top: 0;
+            color: #007bff;
+        }
+        .link-card p {
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .link-card a {
+            display: inline-block;
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: background-color 0.3s ease;
+        }
+        .link-card a:hover {
+            background-color: #0056b3;
+        }
+        .features {
+            margin-top: 60px;
+        }
+        .features h2 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        .feature-item {
+            text-align: center;
+            padding: 20px;
+        }
+        .feature-item i {
+            font-size: 2rem;
+            color: #007bff;
+            margin-bottom: 15px;
+        }
+        .feature-item h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .feature-item p {
+            color: #666;
+        }
+        .stats {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin: 30px 0;
+        }
+        .stat-item {
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            color: #666;
+            font-size: 0.9rem;
+        }
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>{{ service_name }}</h1>
+            <div class="subtitle">OpenAI兼容API代理 for Z.ai GLM-4.5</div>
+            <p>一个高性能、易于部署的API代理服务，让你能够使用OpenAI兼容的格式访问Z.ai的GLM-4.5模型。</p>
+            
+            <div class="stats">
+                <div class="stat-item">
+                    <div class="stat-value">{{ models_count }}</div>
+                    <div class="stat-label">可用模型</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ providers_count }}</div>
+                    <div class="stat-label">服务提供商</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ version }}</div>
+                    <div class="stat-label">当前版本</div>
+                </div>
+            </div>
+        </header>
+        
+        <div class="links">
+            <div class="link-card">
+                <h3>📖 API文档</h3>
+                <p>查看完整的API文档，了解如何使用本服务。</p>
+                <a href="/docs">查看文档</a>
+            </div>
+            
+            <div class="link-card">
+                <h3>📊 API调用看板</h3>
+                <p>实时监控API调用情况，查看请求统计和性能指标。</p>
+                <a href="/dashboard">查看看板</a>
+            </div>
+            
+            <div class="link-card">
+                <h3>🤖 模型列表</h3>
+                <p>查看可用的AI模型列表及其详细信息。</p>
+                <a href="/v1/models">查看模型</a>
+            </div>
+        </div>
+        
+        <div class="features">
+            <h2>功能特性</h2>
+            <div class="feature-list">
+                <div class="feature-item">
+                    <div>🔄</div>
+                    <h3>OpenAI API兼容</h3>
+                    <p>完全兼容OpenAI的API格式，无需修改客户端代码</p>
+                </div>
+                
+                <div class="feature-item">
+                    <div>🌊</div>
+                    <h3>流式响应支持</h3>
+                    <p>支持实时流式输出，提供更好的用户体验</p>
+                </div>
+                
+                <div class="feature-item">
+                    <div>🔐</div>
+                    <h3>身份验证</h3>
+                    <p>支持API密钥验证，确保服务安全</p>
+                </div>
+                
+                <div class="feature-item">
+                    <div>🛠️</div>
+                    <h3>灵活配置</h3>
+                    <p>通过环境变量进行灵活配置</p>
+                </div>
+                
+                <div class="feature-item">
+                    <div>📝</div>
+                    <h3>思考过程展示</h3>
+                    <p>智能处理并展示模型的思考过程</p>
+                </div>
+                
+                <div class="feature-item">
+                    <div>📊</div>
+                    <h3>实时监控</h3>
+                    <p>提供Web仪表板，实时显示API转发情况和统计信息</p>
+                </div>
+            </div>
+        </div>
+        
+        <footer>
+            <p>© 2024 {{ service_name }}. Powered by FastAPI & Z.ai GLM-4.5</p>
+        </footer>
+    </div>
+</body>
+</html>
