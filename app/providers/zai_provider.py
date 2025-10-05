@@ -47,6 +47,8 @@ class ZAIProvider(BaseProvider):
             settings.THINKING_MODEL: "0727-360B-API",  # GLM-4.5-Thinking
             settings.SEARCH_MODEL: "0727-360B-API",  # GLM-4.5-Search
             settings.AIR_MODEL: "0727-106B-API",  # GLM-4.5-Air
+            settings.GLM_46_MODEL: "GLM-4-6-API-V1",  # GLM-4.6
+            settings.GLM_46_THINKING_MODEL: "GLM-4-6-API-V1",  # GLM-4.6-Thinking
         }
     
     def get_supported_models(self) -> List[str]:
@@ -56,7 +58,9 @@ class ZAIProvider(BaseProvider):
             settings.GLM_45V_MODEL,
             settings.THINKING_MODEL,
             settings.SEARCH_MODEL,
-            settings.AIR_MODEL
+            settings.AIR_MODEL,
+            settings.GLM_46_MODEL,
+            settings.GLM_46_THINKING_MODEL
         ]
     
     async def get_token(self) -> str:
@@ -177,13 +181,17 @@ class ZAIProvider(BaseProvider):
         
         # 确定请求的模型特性
         requested_model = request.model
-        is_thinking = requested_model == settings.THINKING_MODEL
+        is_thinking = (requested_model == settings.THINKING_MODEL or
+                      requested_model == settings.GLM_46_THINKING_MODEL or
+                      request.get("reasoning", False))
         is_search = requested_model == settings.SEARCH_MODEL
         is_air = requested_model == settings.AIR_MODEL
         is_vision = requested_model == settings.GLM_45V_MODEL
+        is_glm46 = (requested_model == settings.GLM_46_MODEL or
+                   requested_model == settings.GLM_46_THINKING_MODEL)
         
         # 记录模型特性
-        self.logger.info(f"🎯 模型特性检测: {requested_model} (thinking={is_thinking}, search={is_search}, air={is_air}, vision={is_vision})")
+        self.logger.info(f"🎯 模型特性检测: {requested_model} (thinking={is_thinking}, search={is_search}, air={is_air}, vision={is_vision}, glm46={is_glm46})")
         
         # 获取上游模型ID
         upstream_model_id = self.model_mapping.get(requested_model, "0727-360B-API")
