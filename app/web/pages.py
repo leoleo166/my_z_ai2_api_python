@@ -123,3 +123,16 @@ async def dashboard_requests():
     except Exception as e:
         logger.error(f"❌ 获取请求数据失败: {e}")
         return []
+
+
+@router.get("/models", response_class=HTMLResponse)
+async def models(request: Request):
+    """模型列表页面"""
+    try:
+        return templates.TemplateResponse("models.html", {
+            "request": request,
+            "service_name": settings.SERVICE_NAME
+        })
+    except Exception as e:
+        logger.error(f"❌ 渲染模型列表页面失败: {e}")
+        return HTMLResponse(content="<h1>模型列表页面暂时不可用</h1><p>请稍后再试</p>", status_code=500)

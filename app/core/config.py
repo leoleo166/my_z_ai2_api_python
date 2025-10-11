@@ -103,15 +103,47 @@ class Settings(BaseSettings):
 
         return []
 
+    @property
+    def longcat_token_list(self) -> List[str]:
+        """
+        解析 LongCat token 列表
+
+        从 LONGCAT_TOKENS_FILE 指定的文件加载 token（如果配置了文件路径）
+        """
+        # 如果未配置token文件路径，返回空列表
+        if not self.LONGCAT_TOKENS_FILE:
+            logger.debug("📄 未配置LONGCAT_TOKENS_FILE，跳过LongCat token文件加载")
+            return []
+
+        # 从文件加载token
+        tokens = self._load_tokens_from_file(self.LONGCAT_TOKENS_FILE)
+
+        # 去重，保持顺序
+        if tokens:
+            seen = set()
+            unique_tokens = []
+            for token in tokens:
+                if token not in seen:
+                    unique_tokens.append(token)
+                    seen.add(token)
+
+            # 记录去重信息
+            duplicate_count = len(tokens) - len(unique_tokens)
+            if duplicate_count > 0:
+                logger.warning(f"⚠️ 检测到 {duplicate_count} 个重复LongCat token，已自动去重")
+
+            return unique_tokens
+
+        return []
 
     # Model Configuration
     PRIMARY_MODEL: str = os.getenv("PRIMARY_MODEL", "GLM-4.5")
     THINKING_MODEL: str = os.getenv("THINKING_MODEL", "GLM-4.5-Thinking")
     SEARCH_MODEL: str = os.getenv("SEARCH_MODEL", "GLM-4.5-Search")
     AIR_MODEL: str = os.getenv("AIR_MODEL", "GLM-4.5-Air")
-    GLM_45V_MODEL: str = os.getenv("GLM_45V_MODEL", "GLM-4.5V")
-    GLM_46_MODEL: str = os.getenv("GLM_46_MODEL", "GLM-4.6")
-    GLM_46_THINKING_MODEL: str = os.getenv("GLM_46_THINKING_MODEL", "GLM-4.6-Thinking")
+    GLM46_MODEL: str = os.getenv("GLM46_MODEL", "GLM-4.6")
+    GLM46_THINKING_MODEL: str = os.getenv("GLM46_THINKING_MODEL", "GLM-4.6-Thinking")
+    GLM46_SEARCH_MODEL: str = os.getenv("GLM46_SEARCH_MODEL", "GLM-4.6-Search")
 
 
 
@@ -122,14 +154,18 @@ class Settings(BaseSettings):
         return {
             # Z.AI models
             "GLM-4.5": "zai",
-            "GLM-4.5V": "zai",
             "GLM-4.5-Thinking": "zai",
             "GLM-4.5-Search": "zai",
             "GLM-4.5-Air": "zai",
             "GLM-4.6": "zai",
             "GLM-4.6-Thinking": "zai",
+            "GLM-4.6-Search": "zai",
             # K2Think models
             "MBZUAI-IFM/K2-Think": "k2think",
+            # LongCat models
+            "LongCat-Flash": "longcat",
+            "LongCat": "longcat",
+            "LongCat-Search": "longcat",
         }
 
     # Server Configuration
@@ -142,10 +178,9 @@ class Settings(BaseSettings):
     SCAN_LIMIT: int = int(os.getenv("SCAN_LIMIT", "200000"))
     SKIP_AUTH_TOKEN: bool = os.getenv("SKIP_AUTH_TOKEN", "false").lower() == "true"
 
-
-    # Retry Configuration
-    MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "5"))
-    RETRY_DELAY: float = float(os.getenv("RETRY_DELAY", "1.0"))  # 初始重试延迟（秒）
+    # LongCat Configuration
+    LONGCAT_PASSPORT_TOKEN: Optional[str] = os.getenv("LONGCAT_PASSPORT_TOKEN")
+    LONGCAT_TOKENS_FILE: Optional[str] = os.getenv("LONGCAT_TOKENS_FILE")
 
     # Browser Headers
     CLIENT_HEADERS: Dict[str, str] = {

@@ -9,7 +9,11 @@ import json
 import time
 import uuid
 import httpx
-import asyncio
+import hmac
+import hashlib
+import base64
+from urllib.parse import urlencode
+import os
 from datetime import datetime
 from typing import Dict, List, Any, Optional, AsyncGenerator, Union
 
@@ -22,6 +26,57 @@ from app.core.zai_transformer import generate_uuid, get_zai_dynamic_headers
 from app.utils.sse_tool_handler import SSEToolHandler
 
 logger = get_logger()
+
+
+def _urlsafe_b64decode(data: str) -> bytes:
+    """Decode a URL-safe base64 string with proper padding."""
+    if isinstance(data, str):
+        data_bytes = data.encode("utf-8")
+    else:
+        data_bytes = data
+    padding = b"=" * (-len(data_bytes) % 4)
+    return base64.urlsafe_b64decode(data_bytes + padding)
+
+
+def _decode_jwt_payload(token: str) -> Dict[str, Any]:
+    """Decode JWT payload without verification to extract metadata."""
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload_raw = _urlsafe_b64decode(parts[1])
+        return json.loads(payload_raw.decode("utf-8", errors="ignore"))
+    except Exception:
+        return {}
+
+
+def _extract_user_id_from_token(token: str) -> str:
+    """Extract user_id from a JWT's payload. Fallback to 'guest'."""
+    payload = _decode_jwt_payload(token) if token else {}
+    for key in ("id", "user_id", "uid", "sub"):
+        val = payload.get(key)
+        if isinstance(val, (str, int)) and str(val):
+            return str(val)
+    return "guest"
+
+
+def generate_signature(message_text: str, request_id: str, timestamp_ms: int, user_id: str, secret: str = "junjie") -> str:
+    """Dual-layer HMAC-SHA256 signature.
+
+    Layer1: derived key = HMAC(secret, window_index)
+    Layer2: signature = HMAC(derived_key, canonical_string)
+    canonical_string = "requestId,<id>,timestamp,<ts>,user_id,<uid>|<msg>|<ts>"
+    """
+    r = str(timestamp_ms)
+    e = f"requestId,{request_id},timestamp,{timestamp_ms},user_id,{user_id}"
+    t = message_text or ""
+    i = f"{e}|{t}|{r}"
+
+    window_index = timestamp_ms // (5 * 60 * 1000)
+    root_key = (secret or "junjie").encode("utf-8")
+    derived_hex = hmac.new(root_key, str(window_index).encode("utf-8"), hashlib.sha256).hexdigest()
+    signature = hmac.new(derived_hex.encode("utf-8"), i.encode("utf-8"), hashlib.sha256).hexdigest()
+    return signature
 
 
 class ZAIProvider(BaseProvider):
@@ -43,24 +98,24 @@ class ZAIProvider(BaseProvider):
         # 模型映射
         self.model_mapping = {
             settings.PRIMARY_MODEL: "0727-360B-API",  # GLM-4.5
-            settings.GLM_45V_MODEL: "glm-4.5v",  # GLM-4.5V
             settings.THINKING_MODEL: "0727-360B-API",  # GLM-4.5-Thinking
             settings.SEARCH_MODEL: "0727-360B-API",  # GLM-4.5-Search
             settings.AIR_MODEL: "0727-106B-API",  # GLM-4.5-Air
-            settings.GLM_46_MODEL: "GLM-4-6-API-V1",  # GLM-4.6
-            settings.GLM_46_THINKING_MODEL: "GLM-4-6-API-V1",  # GLM-4.6-Thinking
+            settings.GLM46_MODEL: "GLM-4-6-API-V1",  # GLM-4.6
+            settings.GLM46_THINKING_MODEL: "GLM-4-6-API-V1",  # GLM-4.6-Thinking
+            settings.GLM46_SEARCH_MODEL: "GLM-4-6-API-V1",  # GLM-4.6-Search
         }
     
     def get_supported_models(self) -> List[str]:
         """获取支持的模型列表"""
         return [
             settings.PRIMARY_MODEL,
-            settings.GLM_45V_MODEL,
             settings.THINKING_MODEL,
             settings.SEARCH_MODEL,
             settings.AIR_MODEL,
-            settings.GLM_46_MODEL,
-            settings.GLM_46_THINKING_MODEL
+            settings.GLM46_MODEL,
+            settings.GLM46_THINKING_MODEL,
+            settings.GLM46_SEARCH_MODEL,
         ]
     
     async def get_token(self) -> str:
@@ -115,9 +170,6 @@ class ZAIProvider(BaseProvider):
         
         # 处理消息格式
         messages = []
-        has_multimodal = False
-        media_stats = {"text": 0, "images": 0, "videos": 0, "documents": 0, "audios": 0}
-        
         for msg in request.messages:
             if isinstance(msg.content, str):
                 messages.append({
@@ -128,77 +180,40 @@ class ZAIProvider(BaseProvider):
                 # 处理多模态内容
                 content_parts = []
                 for part in msg.content:
-                    if hasattr(part, 'type'):
-                        part_dict = {"type": part.type}
-                        
-                        # 处理不同类型的内容
-                        if part.type == "text" and hasattr(part, 'text') and part.text:
-                            part_dict["text"] = part.text
-                            media_stats["text"] += 1
-                        elif part.type == "image_url" and hasattr(part, 'image_url') and part.image_url:
-                            part_dict["image_url"] = part.image_url
-                            media_stats["images"] += 1
-                            has_multimodal = True
-                        elif part.type == "video_url" and hasattr(part, 'video_url') and part.video_url:
-                            part_dict["video_url"] = part.video_url
-                            media_stats["videos"] += 1
-                            has_multimodal = True
-                        elif part.type == "document_url" and hasattr(part, 'document_url') and part.document_url:
-                            part_dict["document_url"] = part.document_url
-                            media_stats["documents"] += 1
-                            has_multimodal = True
-                        elif part.type == "audio_url" and hasattr(part, 'audio_url') and part.audio_url:
-                            part_dict["audio_url"] = part.audio_url
-                            media_stats["audios"] += 1
-                            has_multimodal = True
-                        
-                        # 只有当内容不为空时才添加
-                        if any(part_dict.get(key) for key in ["text", "image_url", "video_url", "document_url", "audio_url"]):
-                            content_parts.append(part_dict)
-                
-                # 如果有有效的内容部分，添加到消息中
-                if content_parts:
-                    messages.append({
-                        "role": msg.role,
-                        "content": content_parts
-                    })
-                else:
-                    # 如果没有有效内容，回退到空字符串
-                    messages.append({
-                        "role": msg.role,
-                        "content": ""
-                    })
-        
-        # 记录多模态内容统计
-        if has_multimodal:
-            total_media = media_stats["images"] + media_stats["videos"] + media_stats["documents"] + media_stats["audios"]
-            self.logger.info(f"🎯 检测到多模态请求: 文本({media_stats['text']}) 图像({media_stats['images']}) 视频({media_stats['videos']}) 文档({media_stats['documents']}) 音频({media_stats['audios']})")
-            
-            if is_vision:
-                self.logger.info("✅ GLM-4.5V 支持多模态理解")
-            else:
-                self.logger.warning("⚠️ 检测到多模态内容但模型不支持，请使用 GLM-4.5V 模型")
+                    if hasattr(part, 'type') and hasattr(part, 'text'):
+                        content_parts.append({
+                            "type": part.type,
+                            "text": part.text
+                        })
+                messages.append({
+                    "role": msg.role,
+                    "content": content_parts
+                })
         
         # 确定请求的模型特性
+        # Extract last user message text for signing
+        last_user_text = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                content = m.get("content")
+                if isinstance(content, str):
+                    last_user_text = content
+                    break
+                elif isinstance(content, list):
+                    texts = [p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"]
+                    last_user_text = "\n".join([t for t in texts if t])
+                    break
         requested_model = request.model
-        is_thinking = (requested_model == settings.THINKING_MODEL or
-                      requested_model == settings.GLM_46_THINKING_MODEL or
-                      request.get("reasoning", False))
-        is_search = requested_model == settings.SEARCH_MODEL
-        is_air = requested_model == settings.AIR_MODEL
-        is_vision = requested_model == settings.GLM_45V_MODEL
-        is_glm46 = (requested_model == settings.GLM_46_MODEL or
-                   requested_model == settings.GLM_46_THINKING_MODEL)
-        
-        # 记录模型特性
-        self.logger.info(f"🎯 模型特性检测: {requested_model} (thinking={is_thinking}, search={is_search}, air={is_air}, vision={is_vision}, glm46={is_glm46})")
+        is_thinking = "-thinking" in requested_model.casefold()
+        is_search = "-search" in requested_model.casefold()
+        is_air = "-air" in requested_model.casefold()
         
         # 获取上游模型ID
         upstream_model_id = self.model_mapping.get(requested_model, "0727-360B-API")
         
         # 构建MCP服务器列表
         mcp_servers = []
-        if is_search:
+        if is_search and "-4.5" in requested_model:
             mcp_servers.append("deep-web-search")
             self.logger.info("🔍 检测到搜索模型，添加 deep-web-search MCP 服务器")
         
@@ -214,10 +229,41 @@ class ZAIProvider(BaseProvider):
                 "image_generation": False,
                 "web_search": is_search,
                 "auto_web_search": is_search,
-                "preview_mode": is_vision,  # GLM-4.5V 需要启用预览模式
+                "preview_mode": False,
                 "flags": [],
-                "features": [],
-                "enable_thinking": is_thinking or is_vision,  # GLM-4.5V 也支持思考过程
+                "features": [
+                    {
+                        "type": "mcp",
+                        "server": "vibe-coding",
+                        "status": "hidden"
+                    },
+                    {
+                        "type": "mcp",
+                        "server": "ppt-maker",
+                        "status": "hidden"
+                    },
+                    {
+                        "type": "mcp",
+                        "server": "image-search",
+                        "status": "hidden"
+                    },
+                    {
+                        "type": "mcp",
+                        "server": "deep-research",
+                        "status": "hidden"
+                    },
+                    {
+                        "type": "tool_selector",
+                        "server": "tool_selector",
+                        "status": "hidden"
+                    },
+                    {
+                        "type": "mcp",
+                        "server": "advanced-search",
+                        "status": "hidden"
+                    }
+                ],
+                "enable_thinking": is_thinking,
             },
             "background_tasks": {
                 "title_generation": False,
@@ -237,34 +283,7 @@ class ZAIProvider(BaseProvider):
             "model_item": {
                 "id": upstream_model_id,
                 "name": requested_model,
-                "owned_by": "z.ai",
-                "info": {
-                    "id": upstream_model_id,
-                    "user_id": "api-user",
-                    "base_model_id": None,
-                    "name": requested_model,
-                    "params": {
-                        "top_p": 0.6 if is_vision else 0.95,  # GLM-4.5V 使用不同的默认参数
-                        "temperature": 0.8 if is_vision else 0.6,
-                    },
-                    "meta": {
-                        "profile_image_url": "/static/favicon.png",
-                        "description": "Advanced visual understanding and analysis" if is_vision else "Most advanced model, proficient in coding and tool use",
-                        "capabilities": {
-                            "vision": is_vision,
-                            "citations": False,
-                            "preview_mode": is_vision,
-                            "web_search": is_search,
-                            "language_detection": False,
-                            "restore_n_source": False,
-                            "mcp": False if is_vision else True,  # GLM-4.5V 不支持 MCP
-                            "file_qa": False if is_vision else True,
-                            "returnFc": True,
-                            "returnThink": is_thinking or is_vision,
-                            "think": is_thinking or is_vision
-                        }
-                    }
-                }
+                "owned_by": "z.ai"
             },
             "chat_id": chat_id,
             "id": generate_uuid(),
@@ -287,12 +306,36 @@ class ZAIProvider(BaseProvider):
         headers = get_zai_dynamic_headers(chat_id)
         if token:
             headers["Authorization"] = f"Bearer {token}"
+
+        # Dual-layer HMAC signing metadata and header
+        user_id = _extract_user_id_from_token(token)
+        timestamp_ms = int(time.time() * 1000)
+        request_id = generate_uuid()
+        secret = os.getenv("ZAI_SIGNING_SECRET", "junjie") or "junjie"
+        signature = generate_signature(
+            message_text=last_user_text,
+            request_id=request_id,
+            timestamp_ms=timestamp_ms,
+            user_id=user_id,
+            secret=secret,
+        )
+        query_params = {
+            "timestamp": timestamp_ms,
+            "requestId": request_id,
+            "user_id": user_id,
+            "token": token or "",
+            "current_url": f"https://chat.z.ai/c/{chat_id}",
+            "pathname": f"/c/{chat_id}",
+            "signature_timestamp": timestamp_ms,
+        }
+        signed_url = f"{self.config.api_endpoint}?{urlencode(query_params)}"
+        headers["X-Signature"] = signature
         
         # 存储当前token用于错误处理
         self._current_token = token
 
         return {
-            "url": self.config.api_endpoint,
+            "url": signed_url,
             "headers": headers,
             "body": body,
             "token": token,
@@ -315,7 +358,7 @@ class ZAIProvider(BaseProvider):
             # 根据请求类型返回响应
             if request.stream:
                 # 流式响应
-                return self._create_stream_response_with_retry(request, transformed)
+                return self._create_stream_response(request, transformed)
             else:
                 # 非流式响应
                 async with httpx.AsyncClient(timeout=30.0) as client:
@@ -336,134 +379,66 @@ class ZAIProvider(BaseProvider):
             self.log_response(False, str(e))
             return self.handle_error(e, "请求处理")
 
-    async def _create_stream_response_with_retry(
+    
+    async def _create_stream_response(
         self,
         request: OpenAIRequest,
         transformed: Dict[str, Any]
     ) -> AsyncGenerator[str, None]:
-        """创建带重试机制的流式响应生成器"""
-        retry_count = 0
-        last_error = None
+
         current_token = transformed.get("token", "")
-
-        while retry_count <= settings.MAX_RETRIES:
-            try:
-                # 如果是重试，重新获取令牌并更新请求
-                if retry_count > 0:
-                    delay = settings.RETRY_DELAY
-                    self.logger.warning(f"重试请求 ({retry_count}/{settings.MAX_RETRIES}) - 等待 {delay:.1f}s")
-                    await asyncio.sleep(delay)
-
-                    # 标记前一个token失败（如果不是匿名模式）
-                    if current_token and not settings.ANONYMOUS_MODE:
-                        self.mark_token_failure(current_token, Exception(f"Retry {retry_count}: {last_error}"))
-
-                    # 重新获取令牌
-                    self.logger.info("🔑 重新获取令牌用于重试...")
-                    new_token = await self.get_token()
-                    if not new_token:
-                        self.logger.error("❌ 重试时无法获取有效的认证令牌")
-                        raise Exception("重试时无法获取有效的认证令牌")
-                    transformed["headers"]["Authorization"] = f"Bearer {new_token}"
-                    current_token = new_token
-
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    # 发送请求到上游
-                    self.logger.info(f"🎯 发送请求到 Z.AI: {transformed['url']}")
-                    async with client.stream(
-                        "POST",
-                        transformed["url"],
-                        json=transformed["body"],
-                        headers=transformed["headers"],
-                    ) as response:
-                        # 检查响应状态码
-                        if response.status_code == 400:
-                            # 400 错误，触发重试
-                            error_text = await response.aread()
-                            error_msg = error_text.decode('utf-8', errors='ignore')
-                            self.logger.warning(f"❌ 上游返回 400 错误 (尝试 {retry_count + 1}/{settings.MAX_RETRIES + 1})")
-
-                            retry_count += 1
-                            last_error = f"400 Bad Request: {error_msg}"
-
-                            # 如果还有重试机会，继续循环
-                            if retry_count <= settings.MAX_RETRIES:
-                                continue
-                            else:
-                                # 达到最大重试次数，抛出错误
-                                self.logger.error(f"❌ 达到最大重试次数 ({settings.MAX_RETRIES})，请求失败")
-                                error_response = {
-                                    "error": {
-                                        "message": f"Request failed after {settings.MAX_RETRIES} retries: {last_error}",
-                                        "type": "upstream_error",
-                                        "code": 400
-                                    }
-                                }
-                                yield f"data: {json.dumps(error_response)}\n\n"
-                                yield "data: [DONE]\n\n"
-                                return
-
-                        elif response.status_code != 200:
-                            # 其他错误，直接返回
-                            self.logger.error(f"❌ 上游返回错误: {response.status_code}")
-                            error_text = await response.aread()
-                            error_msg = error_text.decode('utf-8', errors='ignore')
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                self.logger.info(f"🎯 发送请求到 Z.AI: {transformed['url']}")
+                async with client.stream(
+                    "POST",
+                    transformed["url"],
+                    json=transformed["body"],
+                    headers=transformed["headers"],
+                ) as response:
+                    if response.status_code != 200:
+                        self.logger.error(f"❌ 上游返回错误: {response.status_code}")
+                        error_text = await response.aread()
+                        error_msg = error_text.decode('utf-8', errors='ignore')
+                        if error_msg:
                             self.logger.error(f"❌ 错误详情: {error_msg}")
-
-                            error_response = {
-                                "error": {
-                                    "message": f"Upstream error: {response.status_code}",
-                                    "type": "upstream_error",
-                                    "code": response.status_code
-                                }
+                        error_response = {
+                            "error": {
+                                "message": f"Upstream error: {response.status_code}",
+                                "type": "upstream_error",
+                                "code": response.status_code
                             }
-                            yield f"data: {json.dumps(error_response)}\n\n"
-                            yield "data: [DONE]\n\n"
-                            return
-
-                        # 200 成功，处理响应
-                        if retry_count > 0:
-                            self.logger.info(f"✨ 第 {retry_count} 次重试成功")
-
-                        # 标记token使用成功（如果不是匿名模式）
-                        if current_token and not settings.ANONYMOUS_MODE:
-                            token_pool = get_token_pool()
-                            if token_pool:
-                                token_pool.mark_token_success(current_token)
-
-                        # 处理流式响应
-                        chat_id = transformed["chat_id"]
-                        model = transformed["model"]
-                        async for chunk in self._handle_stream_response(response, chat_id, model, request, transformed):
-                            yield chunk
+                        }
+                        yield f"data: {json.dumps(error_response)}\n\n"
+                        yield "data: [DONE]\n\n"
                         return
 
-            except Exception as e:
-                self.logger.error(f"❌ 流处理错误: {e}")
-                import traceback
-                self.logger.error(traceback.format_exc())
+                    if current_token and not settings.ANONYMOUS_MODE:
+                        token_pool = get_token_pool()
+                        if token_pool:
+                            token_pool.mark_token_success(current_token)
 
-                # 标记token失败（如果不是匿名模式）
-                if current_token and not settings.ANONYMOUS_MODE:
-                    self.mark_token_failure(current_token, e)
-
-                # 检查是否还可以重试
-                retry_count += 1
-                last_error = str(e)
-
-                if retry_count > settings.MAX_RETRIES:
-                    # 达到最大重试次数，返回错误
-                    self.logger.error(f"❌ 达到最大重试次数 ({settings.MAX_RETRIES})，流处理失败")
-                    error_response = {
-                        "error": {
-                            "message": f"Stream processing failed after {settings.MAX_RETRIES} retries: {last_error}",
-                            "type": "stream_error"
-                        }
-                    }
-                    yield f"data: {json.dumps(error_response)}\n\n"
-                    yield "data: [DONE]\n\n"
+                    chat_id = transformed["chat_id"]
+                    model = transformed["model"]
+                    async for chunk in self._handle_stream_response(response, chat_id, model, request, transformed):
+                        yield chunk
                     return
-    
+        except Exception as e:
+            self.logger.error(f"❌ 流处理错误: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            if current_token and not settings.ANONYMOUS_MODE:
+                self.mark_token_failure(current_token, e)
+            error_response = {
+                "error": {
+                    "message": str(e),
+                    "type": "stream_error"
+                }
+            }
+            yield f"data: {json.dumps(error_response)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
     async def transform_response(
         self, 
         response: httpx.Response, 
@@ -587,7 +562,7 @@ class ZAIProvider(BaseProvider):
                                             model,
                                             {
                                                 "role": "assistant",
-                                                "thinking": {"content": content}
+                                                "reasoning_content": content
                                             }
                                         )
                                         yield await self.format_sse_chunk(thinking_chunk)
@@ -699,7 +674,114 @@ class ZAIProvider(BaseProvider):
         chat_id: str, 
         model: str
     ) -> Dict[str, Any]:
-        """处理非流式响应"""
-        # 简化的非流式响应处理
-        content = "非流式响应处理中..."
-        return self.create_openai_response(chat_id, model, content)
+        """处理非流式响应
+
+        说明：上游始终以 SSE 形式返回（transform_request 固定 stream=True），
+        因此这里需要聚合 aiter_lines() 的 data: 块，提取 usage、思考内容与答案内容，
+        并最终产出一次性 OpenAI 格式响应。
+        """
+        final_content = ""
+        reasoning_content = ""
+        usage_info: Dict[str, int] = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+        try:
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+
+                line = line.strip()
+
+                # 仅处理以 data: 开头的 SSE 行，其余行尝试作为错误/JSON 忽略
+                if not line.startswith("data:"):
+                    # 尝试解析为错误 JSON
+                    try:
+                        maybe_err = json.loads(line)
+                        if isinstance(maybe_err, dict) and (
+                            "error" in maybe_err or "code" in maybe_err or "message" in maybe_err
+                        ):
+                            # 统一错误处理
+                            msg = (
+                                (maybe_err.get("error") or {}).get("message")
+                                if isinstance(maybe_err.get("error"), dict)
+                                else maybe_err.get("message")
+                            ) or "上游返回错误"
+                            return self.handle_error(Exception(msg), "API响应")
+                    except Exception:
+                        pass
+                    continue
+
+                data_str = line[5:].strip()
+                if not data_str or data_str in ("[DONE]", "DONE", "done"):
+                    continue
+
+                # 解析 SSE 数据块
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                if chunk.get("type") != "chat:completion":
+                    continue
+
+                data = chunk.get("data", {})
+                phase = data.get("phase")
+                delta_content = data.get("delta_content", "")
+                edit_content = data.get("edit_content", "")
+
+                # 记录用量（通常在最后块中出现，但这里每次覆盖保持最新）
+                if data.get("usage"):
+                    try:
+                        usage_info = data["usage"]
+                    except Exception:
+                        pass
+
+                # 思考阶段聚合（去除 <details><summary>... 包裹头）
+                if phase == "thinking":
+                    if delta_content:
+                        if delta_content.startswith("<details"):
+                            cleaned = (
+                                delta_content.split("</summary>\n>")[-1].strip()
+                                if "</summary>\n>" in delta_content
+                                else delta_content
+                            )
+                        else:
+                            cleaned = delta_content
+                        reasoning_content += cleaned
+
+                # 答案阶段聚合
+                elif phase == "answer":
+                    # 当 edit_content 同时包含思考结束标记与答案时，提取答案部分
+                    if edit_content and "</details>\n" in edit_content:
+                        content_after = edit_content.split("</details>\n")[-1]
+                        if content_after:
+                            final_content += content_after
+                    elif delta_content:
+                        final_content += delta_content
+
+        except Exception as e:
+            self.logger.error(f"❌ 非流式响应处理错误: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            # 返回统一错误响应
+            return self.handle_error(e, "非流式聚合")
+
+        # 清理并返回
+        final_content = (final_content or "").strip()
+        reasoning_content = (reasoning_content or "").strip()
+
+        # 若没有聚合到答案，但有思考内容，则保底返回思考内容
+        if not final_content and reasoning_content:
+            final_content = reasoning_content
+
+        # 返回包含推理内容的标准响应（若无推理则不会携带）
+        return self.create_openai_response_with_reasoning(
+            chat_id,
+            model,
+            final_content,
+            reasoning_content,
+            usage_info,
+        )

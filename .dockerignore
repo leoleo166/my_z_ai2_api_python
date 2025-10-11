@@ -28,13 +28,6 @@ MANIFEST
 tests/
 docs/
 
-# 虚拟环境
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
 # IDE相关
 .vscode/
 .idea/

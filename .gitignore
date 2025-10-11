@@ -16,6 +16,7 @@ main.onefile-build/
 logs/
 backup/
 uv.lock
+AGENTS.md
 
 # AI Toolset
 .augment/
@@ -143,15 +144,6 @@ celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
 
 # Spyder project settings
 .spyderproject

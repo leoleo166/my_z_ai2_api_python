@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Union, AsyncGenerator, Any
 from app.providers.base import BaseProvider, provider_registry
 from app.providers.zai_provider import ZAIProvider
 from app.providers.k2think_provider import K2ThinkProvider
+from app.providers.longcat_provider import LongCatProvider
 from app.models.schemas import OpenAIRequest
 from app.core.config import settings
 from app.utils.logger import get_logger
@@ -45,6 +46,12 @@ class ProviderFactory:
                 k2think_provider.get_supported_models()
             )
             
+            # 注册 LongCat 提供商
+            longcat_provider = LongCatProvider()
+            provider_registry.register(
+                longcat_provider,
+                longcat_provider.get_supported_models()
+            )
             
             self._initialized = True
             

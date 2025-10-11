@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core import openai
-from app.core import web_routes
+from app.web import pages
 from app.utils.reload_config import RELOAD_CONFIG
 from app.utils.logger import setup_logger
 from app.utils.token_pool import initialize_token_pool
@@ -56,19 +56,15 @@ app.add_middleware(
 
 # Include API routers
 app.include_router(openai.router)
-app.include_router(web_routes.router)
+
+# Include Web routers
+app.include_router(pages.router)
 
 
 @app.options("/")
 async def handle_options():
     """Handle OPTIONS requests"""
     return Response(status_code=200)
-
-
-@app.get("/api")
-async def root():
-    """Root endpoint"""
-    return {"message": "OpenAI Compatible API Server"}
 
 
 def run_server():

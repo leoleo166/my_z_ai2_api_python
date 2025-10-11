@@ -14,7 +14,7 @@ def setup_logger(log_dir=None, log_retention_days=7, log_rotation="1 day", debug
     Create a logger instance
 
     Parameters:
-        log_dir (str): 日志目录
+        log_dir (str): 日志目录 (可选，如果为None或无法创建则仅使用控制台输出)
         log_retention_days (int): 日志保留天数
         log_rotation (str): 日志轮转间隔
         debug_mode (bool): 是否开启调试模式
@@ -35,24 +35,29 @@ def setup_logger(log_dir=None, log_retention_days=7, log_rotation="1 day", debug
 
         logger.add(sys.stderr, level=log_level, format=console_format, colorize=True)
 
-        if log_dir:
-            log_path = Path(log_dir)
-            log_path.mkdir(parents=True, exist_ok=True)
+        # 尝试设置文件日志，如果失败则仅使用控制台输出
+        if debug_mode and log_dir is not None:
+            try:
+                log_path = Path(log_dir)
+                log_path.mkdir(parents=True, exist_ok=True)
 
-            log_file = log_path / "{time:YYYY-MM-DD}.log"
-            file_format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}"
+                log_file = log_path / "{time:YYYY-MM-DD}.log"
+                file_format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}"
 
-            logger.add(
-                str(log_file),
-                level=log_level,
-                format=file_format,
-                rotation=log_rotation,
-                retention=f"{log_retention_days} days",
-                encoding="utf-8",
-                compression="zip",
-                enqueue=True,
-                catch=True,
-            )
+                logger.add(
+                    str(log_file),
+                    level=log_level,
+                    format=file_format,
+                    rotation=log_rotation,
+                    retention=f"{log_retention_days} days",
+                    encoding="utf-8",
+                    compression="zip",
+                    enqueue=True,
+                    catch=True,
+                )
+                logger.info(f"📝 日志文件已启用，目录: {log_dir}")
+            except Exception as file_error:
+                logger.warning(f"⚠️ 无法创建日志目录 {log_dir}，将仅使用控制台输出: {file_error}")
 
         app_logger = logger
 
