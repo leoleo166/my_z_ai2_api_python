@@ -1,4 +1,6 @@
 @echo off
+# 指定编码，预防中文乱码
+chcp 65001 > nul
 echo 正在运行 Python 脚本...
 python main.py
 
